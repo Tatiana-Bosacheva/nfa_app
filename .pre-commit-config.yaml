@@ -1,0 +1,11 @@
+default_language_version:
+    python: python3.11
+repos:
+  - repo: https://github.com/pre-commit/mirrors-isort
+    rev: ''
+    hooks:
+      - id: isort
+  - repo: https://github.com/PyCQA/flake8
+    rev: '6.0.0'
+    hooks:
+      - id: flake8
