@@ -20,7 +20,7 @@ NAME_FILE = "LIQ_Rates_Output.xlsx"
 pd.options.mode.chained_assignment = None
 
 
-def processing_ruonia(date_from, date_to):
+def processing_ruonia(date_from: str, date_to: str) -> pd.DataFrame:
     def get_ruonia_rates(dt_min, stop_date):
         link = (
             f"https://cbr.ru/hd_base/ruonia/dynamics/"
@@ -42,7 +42,7 @@ def processing_ruonia(date_from, date_to):
     return rates
 
 
-def get_tables(response, category, date_from, date_to):
+def get_tables(response: requests.Response, category: str, date_from: str, date_to: str) -> pd.DataFrame:
     soup = BeautifulSoup(response.text, "html.parser")
     headers = []
     if category == "ruonia":
@@ -53,11 +53,11 @@ def get_tables(response, category, date_from, date_to):
             class_="table table-bordered table-condensed arch-table rrr matrix-table_",
         )
 
-        for i in table.find_all("tr")[0]:
+        for i in table.find_all("tr")[0]:  # type: ignore
             if isinstance(i, Tag):
                 headers.append(i.text.strip())
         df = pd.DataFrame(columns=headers)
-        for j in table.find_all("tr")[1:]:
+        for j in table.find_all("tr")[1:]:  # type: ignore
             row_data = j.find_all("td")
             row = [i.text for i in row_data]
             first_value = j.find("th").text.strip()
@@ -71,7 +71,7 @@ def get_tables(response, category, date_from, date_to):
     return df
 
 
-def convert_type_column(df):
+def convert_type_column(df: pd.DataFrame) -> pd.DataFrame:
     try:
         df["Дата ставки"] = pd.to_datetime(df["Дата ставки"], format="%d.%m.%Y")
     except (KeyError, ValueError, AttributeError, TypeError):
@@ -87,7 +87,7 @@ def convert_type_column(df):
     return df
 
 
-def write_to_excel(dfs, categories, name_file):
+def write_to_excel(dfs: list[pd.DataFrame], categories: list[str], name_file: str) -> None:
     with pd.ExcelWriter(name_file) as writer:
         for i, df in enumerate(dfs):
             if categories[i] == "ruonia":
@@ -100,7 +100,7 @@ def write_to_excel(dfs, categories, name_file):
             )
 
 
-def processing_file(name_file):
+def processing_file(name_file: str) -> None:
     wb = openpyxl.load_workbook(name_file)
     sheetnames = wb.sheetnames
     for sheet in sheetnames:
@@ -120,8 +120,8 @@ def processing_file(name_file):
     wb.save(name_file)
 
 
-def processing_request(url, start, end):
-    params = {
+def processing_request(url: str, start: str, end: str) -> pd.DataFrame:
+    params: dict[str, bool | str] = {
         "UniDbQuery.Posted": True,
         "UniDbQuery.From": start,
         "UniDbQuery.To": end,
@@ -131,7 +131,7 @@ def processing_request(url, start, end):
     return df
 
 
-def update_indicators(df):
+def update_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df.rename(columns={"Ставка": "CBR_key_rate"}, inplace=True)
     df["Дата"] = pd.to_datetime(df["Дата"], format="%d.%m.%Y")
     df["CBR_key_rate"] = df["CBR_key_rate"].apply(
@@ -140,14 +140,14 @@ def update_indicators(df):
     return df
 
 
-def get_key_rates(date_from, date_to):
+def get_key_rates(date_from: str, date_to: str) -> pd.DataFrame:
     url = "https://www.cbr.ru/hd_base/KeyRate/"
     df = processing_request(url, date_from, date_to)
     df = update_indicators(df)
     return df
 
 
-def get_rates(df):
+def get_rates(df: pd.DataFrame) -> tuple[list[float], list[float], list[float], list[float]]:
     rates_2y = df["2Y"].values.tolist()
     rates_2y = [i / 100 for i in rates_2y]
 
@@ -185,7 +185,14 @@ def get_rates(df):
     return rates_1y1y, rates_3m3m, rates_1m1m, rates_6m6m
 
 
-def get_spread_rates(key_rates, rates_1m1m, rates_3m3m, rates_1y1y, rates_6m6m, df):
+def get_spread_rates(
+        key_rates: list[float],
+        rates_1m1m: list[float],
+        rates_3m3m: list[float],
+        rates_1y1y: list[float],
+        rates_6m6m: list[float],
+        df: pd.DataFrame
+        ) -> pd.DataFrame:
     spread_1m1m = [(rates_1m1m[i] - key_rates[i]) * 100 for i in range(len(key_rates))]
     spread_3m3m = [(rates_3m3m[i] - key_rates[i]) * 100 for i in range(len(key_rates))]
     spread_1y1y = [(rates_1y1y[i] - key_rates[i]) * 100 for i in range(len(key_rates))]
@@ -198,7 +205,7 @@ def get_spread_rates(key_rates, rates_1m1m, rates_3m3m, rates_1y1y, rates_6m6m, 
     return df
 
 
-def add_new_list(name_file, date_from, date_to):
+def add_new_list(name_file: str, date_from: str, date_to: str) -> None:
     df_roisfix = pd.read_excel(name_file, sheet_name="roisfix")
     rates_1y1y, rates_3m3m, rates_1m1m, rates_6m6m = get_rates(df_roisfix)
     columns = ["Дата", "1M1M", "3M3M", "1Y1Y", "6M6M"]
@@ -221,7 +228,7 @@ def add_new_list(name_file, date_from, date_to):
         df_merge.to_excel(writer, index=False, sheet_name="roisfix implied")
 
 
-def main_fun(categories, date_from, date_to, name_file):
+def main_fun(categories: list[str], date_from: str, date_to: str, name_file: str) -> None:
     all_dfs = []
     for category in categories:
         link = f"http://{category}.ru/archive?date_from={date_from}&date_to={date_to}"
@@ -233,7 +240,7 @@ def main_fun(categories, date_from, date_to, name_file):
     processing_file(name_file)
 
 
-def processing_dates(dates):
+def processing_dates(dates: list) -> list[pd._libs.tslibs.timestamps.Timestamp]:
     months = {
         "января": "01",
         "февраля": "02",
@@ -275,11 +282,11 @@ def processing_dates(dates):
             pass
     df_meeting = pd.DataFrame(all_dates, columns=["Date", "Title"])
     df_meeting = df_meeting.dropna(axis=0)
-    df_meeting.index = [i for i in range(df_meeting.shape[0])]
+    df_meeting.index = [i for i in range(df_meeting.shape[0])]  # type: ignore
     return df_meeting["Date"].tolist()
 
 
-def get_meeting_days():
+def get_meeting_days() -> list[pd._libs.tslibs.timestamps.Timestamp]:
     url = "https://www.cbr.ru/dkp/cal_mp/#t11"
     r = requests.get(url)
     soup = BeautifulSoup(r.text, "html.parser")
@@ -288,7 +295,7 @@ def get_meeting_days():
     return meeting_dates
 
 
-def select_meeting_dates(name_file, meeting_dates):
+def select_meeting_dates(name_file: str, meeting_dates: list[pd._libs.tslibs.timestamps.Timestamp]) -> None:
     wb = openpyxl.load_workbook(name_file)
     wb_main = wb["roisfix implied"]
     max_column = wb_main.max_column
