@@ -22,9 +22,11 @@ pd.options.mode.chained_assignment = None
 
 def processing_ruonia(date_from, date_to):
     def get_ruonia_rates(dt_min, stop_date):
-        link = (f'https://cbr.ru/hd_base/ruonia/dynamics/'
-                f'?UniDbQuery.Posted=True&'
-                f'UniDbQuery.From={dt_min}&UniDbQuery.To={stop_date}')
+        link = (
+            f"https://cbr.ru/hd_base/ruonia/dynamics/"
+            f"?UniDbQuery.Posted=True&"
+            f"UniDbQuery.From={dt_min}&UniDbQuery.To={stop_date}"
+        )
         df = pd.read_html(link, thousands=" ", flavor="html5lib")[0]
         df = df[df.columns[:3]]
         df.rename(columns={"Ставка RUONIA, %": "Значение, %"}, inplace=True)

@@ -1,0 +1,21 @@
+name: CI
+
+on:
+    pull_request:
+        branches: [ main ]
+
+jobs:
+    lint:
+        runs-on: macos-latest
+        steps:
+            - uses: actions/checkout@v4
+            - name: Install requirements
+              run: pip install -r requirements.txt
+            - name: Run Isort
+              run: isort liq_rates.py
+            - name: Run Black
+              run: black liq_rates.py
+            - name: Run Flake8
+              run: flake8 liq_rates.py
+            - name: Run Mypy
+              run: mypy liq_rates.py
