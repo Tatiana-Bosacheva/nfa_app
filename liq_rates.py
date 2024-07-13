@@ -18,6 +18,8 @@ NAME_FILE = "LIQ_Rates_Output.xlsx"
 
 
 pd.options.mode.chained_assignment = None
+pd_timestamp = pd.Timestamp
+bs_tag = Tag
 
 
 def processing_ruonia(date_from: str, date_to: str) -> pd.DataFrame:
@@ -147,7 +149,7 @@ def get_key_rates(date_from: str, date_to: str) -> pd.DataFrame:
     return df
 
 
-def get_rates(df: pd.DataFrame) -> tuple[list[float], list[float], list[float], list[float]]:
+def get_rates(df: pd.DataFrame) -> tuple[list[float], ...]:
     rates_2y = df["2Y"].values.tolist()
     rates_2y = [i / 100 for i in rates_2y]
 
@@ -240,7 +242,7 @@ def main_fun(categories: list[str], date_from: str, date_to: str, name_file: str
     processing_file(name_file)
 
 
-def processing_dates(dates: list) -> list[pd._libs.tslibs.timestamps.Timestamp]:
+def processing_dates(dates: list[bs_tag]) -> list[pd_timestamp]:
     months = {
         "января": "01",
         "февраля": "02",
@@ -261,12 +263,12 @@ def processing_dates(dates: list) -> list[pd._libs.tslibs.timestamps.Timestamp]:
         one_date = []
         try:
             titles = day.find_all("div", class_="title")
-            titles = [title.text.strip().replace("\xa0", " ") for title in titles]
+            titles = [title.text.strip().replace("\xa0", " ") for title in titles]  # type: ignore
             title = [
                 title if "по ключевой ставке" in title else None for title in titles
             ][0]
             meeting_date = (
-                day.find("div", class_="date col-md-5")
+                day.find("div", class_="date col-md-5")  # type: ignore
                 .text.strip()
                 .replace("\xa0", " ")
                 .replace(" года", "")
@@ -286,7 +288,7 @@ def processing_dates(dates: list) -> list[pd._libs.tslibs.timestamps.Timestamp]:
     return df_meeting["Date"].tolist()
 
 
-def get_meeting_days() -> list[pd._libs.tslibs.timestamps.Timestamp]:
+def get_meeting_days() -> list[pd_timestamp]:
     url = "https://www.cbr.ru/dkp/cal_mp/#t11"
     r = requests.get(url)
     soup = BeautifulSoup(r.text, "html.parser")
@@ -295,7 +297,7 @@ def get_meeting_days() -> list[pd._libs.tslibs.timestamps.Timestamp]:
     return meeting_dates
 
 
-def select_meeting_dates(name_file: str, meeting_dates: list[pd._libs.tslibs.timestamps.Timestamp]) -> None:
+def select_meeting_dates(name_file: str, meeting_dates: list[pd_timestamp]) -> None:
     wb = openpyxl.load_workbook(name_file)
     wb_main = wb["roisfix implied"]
     max_column = wb_main.max_column
