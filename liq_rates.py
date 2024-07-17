@@ -22,18 +22,19 @@ pd_timestamp = pd.Timestamp
 bs_tag = Tag
 
 
-def processing_ruonia(date_from: str, date_to: str) -> pd.DataFrame:
-    def get_ruonia_rates(dt_min, stop_date):
-        link = (
-            f"https://cbr.ru/hd_base/ruonia/dynamics/"
-            f"?UniDbQuery.Posted=True&"
-            f"UniDbQuery.From={dt_min}&UniDbQuery.To={stop_date}"
-        )
-        df = pd.read_html(link, thousands=" ", flavor="html5lib")[0]
-        df = df[df.columns[:3]]
-        df.rename(columns={"Ставка RUONIA, %": "Значение, %"}, inplace=True)
-        return df
+def get_ruonia_rates(dt_min, stop_date):
+    link = (
+        f"https://cbr.ru/hd_base/ruonia/dynamics/"
+        f"?UniDbQuery.Posted=True&"
+        f"UniDbQuery.From={dt_min}&UniDbQuery.To={stop_date}"
+    )
+    df = pd.read_html(link, thousands=" ", flavor="html5lib")[0]
+    df = df[df.columns[:3]]
+    df.rename(columns={"Ставка RUONIA, %": "Значение, %"}, inplace=True)
+    return df
 
+
+def processing_ruonia(date_from: str, date_to: str) -> pd.DataFrame:
     rates = pd.DataFrame()
     ruonia = get_ruonia_rates(date_from, date_to)
     ruonia["Дата ставки"] = pd.to_datetime(ruonia["Дата ставки"], format="%d.%m.%Y")
@@ -207,6 +208,13 @@ def get_spread_rates(
     return df
 
 
+def write_to_excel_roisfix_implied(name_file: str, df: pd.DataFrame) -> None:
+    with pd.ExcelWriter(
+        name_file, engine="openpyxl", mode="a", if_sheet_exists="replace"
+    ) as writer:
+        df.to_excel(writer, index=False, sheet_name="roisfix implied")
+
+
 def add_new_list(name_file: str, date_from: str, date_to: str) -> None:
     df_roisfix = pd.read_excel(name_file, sheet_name="roisfix")
     rates_1y1y, rates_3m3m, rates_1m1m, rates_6m6m = get_rates(df_roisfix)
@@ -224,40 +232,25 @@ def add_new_list(name_file: str, date_from: str, date_to: str) -> None:
     df_merge = get_spread_rates(
         key_rates, rates_1m1m, rates_3m3m, rates_1y1y, rates_6m6m, df_merge
     )
-    with pd.ExcelWriter(
-        name_file, engine="openpyxl", mode="a", if_sheet_exists="replace"
-    ) as writer:
-        df_merge.to_excel(writer, index=False, sheet_name="roisfix implied")
+    write_to_excel_roisfix_implied(name_file, df_merge)
 
 
-def main_fun(categories: list[str], date_from: str, date_to: str, name_file: str) -> None:
+def get_dataframes_from_categories(categories: list[str], date_from: str, date_to: str) -> list[pd.DataFrame]:
     all_dfs = []
     for category in categories:
         link = f"http://{category}.ru/archive?date_from={date_from}&date_to={date_to}"
         response = requests.get(link)
         df = get_tables(response, category, date_from, date_to)
         all_dfs.append(df)
-    write_to_excel(all_dfs, categories, name_file)
-    add_new_list(name_file, date_from, date_to)
-    processing_file(name_file)
+    return all_dfs
 
 
 def processing_dates(dates: list[bs_tag]) -> list[pd_timestamp]:
     months = {
-        "января": "01",
-        "февраля": "02",
-        "марта": "03",
-        "апреля": "04",
-        "мая": "05",
-        "июня": "06",
-        "июля": "07",
-        "августа": "08",
-        "сентября": "09",
-        "октября": "10",
-        "ноября": "11",
-        "декабря": "12",
+        "января": "01",  "февраля": "02", "марта": "03", "апреля": "04",
+        "мая": "05", "июня": "06", "июля": "07", "августа": "08",
+        "сентября": "09", "октября": "10", "ноября": "11", "декабря": "12",
     }
-
     all_dates = []
     for day in dates:
         one_date = []
@@ -310,36 +303,45 @@ def select_meeting_dates(name_file: str, meeting_dates: list[pd_timestamp]) -> N
     wb.save(name_file)
 
 
-def send_email(file_path):
-    from_email = ""
-    password = ""
-
-    smtp = smtplib.SMTP("smtp.mail.ru", 587)
-
-    smtp.starttls()
-    smtp.login(from_email, password)
-
+def create_message(file_path: str) -> MIMEMultipart:
     message = MIMEMultipart()
     message["Subject"] = "LIQ Rates"
     ftype, _ = mimetypes.guess_type(file_path)
-    file_type, subtype = ftype.split("/")
+    file_type, subtype = ftype.split("/")  # type: ignore
     if file_type == "application":
         with open(file_path, "rb") as f:
             file = MIMEApplication(f.read(), subtype)
 
     file.add_header("content-disposition", "attachment", filename=file_path)
-
     message.attach(file)
+    return message
+
+
+def send_email(file_path: str) -> None:
+    from_email = ""
+    password = ""
+
+    smtp = smtplib.SMTP("smtp.mail.ru", 587)
+    smtp.starttls()
+    smtp.login(from_email, password)
+
+    message = create_message(file_path)
     smtp.sendmail(from_email, from_email, message.as_string())
     smtp.quit()
 
 
 def main():
     categories = ["ruonia", "roisfix", "nfeaswap", "rurepo"]
-    main_fun(categories, DATE_FROM, DATE_TO, NAME_FILE)
+    all_dfs = get_dataframes_from_categories(categories, DATE_FROM, DATE_TO, NAME_FILE)
+    if any(df.empty is True for df in all_dfs):
+        print('В списке есть пустой датафрейм')
+    else:
+        write_to_excel(all_dfs, categories, NAME_FILE)
+        add_new_list(NAME_FILE, DATE_FROM, DATE_TO)
+    processing_file(NAME_FILE)
     meeting_dates = get_meeting_days()
     select_meeting_dates(NAME_FILE, meeting_dates)
-    # send_email(NAME_FILE)
+    send_email(NAME_FILE)
 
 
 if __name__ == "__main__":
