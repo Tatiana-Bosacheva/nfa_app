@@ -1,2 +1,6 @@
 venv
 .DS_Store
+.mypy_cache
+tests/__pycache__
+.pytest_cache
+__pycache__
