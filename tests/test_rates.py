@@ -1,3 +1,6 @@
+import unittest
+from unittest.mock import MagicMock, patch
+
 import numpy
 import pandas as pd
 import requests
@@ -46,21 +49,18 @@ def test__processing_ruonia(date_from, date_to):
     assert df['Дата ставки'].dtype.type == numpy.datetime64
 
 
-# class TestGetMeetingDays(unittest.TestCase):
+class TestGetMeetingDays(unittest.TestCase):
 
-#     def get_request_mock(self, mock_request):
-#         mock_response = Mock()
-#         mock_response.status_code = 200
-#         mock_response.text.return_value = 'Hello'
-#         mock_request.get.return_value = mock_response
-#         return mock_request
+    def get_request_mock(self, url):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = 'Hello'
+        return mock_response
 
-#     @patch('liq_rates.requests')
-#     def test__get_meeting_days(self, requests):
-#         with patch('liq_rates.get_url', new=self.get_request_mock):
-#             dates = get_meeting_days()
-
-#             assert dates == []
+    def test__get_meeting_days(self):
+        with patch('liq_rates.get_url', new=self.get_request_mock):
+            dates = get_meeting_days()
+            assert dates == []
 
 
 def test__processing_request(link_key_rate_no_parametres, date_from, date_to):
