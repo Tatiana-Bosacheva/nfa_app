@@ -7,6 +7,12 @@ IMAGE = "nfa_app"
 IMAGE_REF := $(REGISTRY)/$(LOGIN)/$(IMAGE)
 
 
+ifneq (,$(wildcard .env))
+    $(info Found .env file.)
+    include .env
+    export
+endif
+
 image_build:
 	docker build --tag $(IMAGE_REF) .
 
