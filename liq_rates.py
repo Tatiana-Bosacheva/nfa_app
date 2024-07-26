@@ -22,27 +22,41 @@ pd_timestamp = pd.Timestamp
 bs_tag = Tag
 
 
-def get_ruonia_rates(dt_min, stop_date):
+def get_ruonia(link: str) -> str:
+    response = requests.get(link)
+    if response.status_code == 200:
+        return response.text
+    else:
+        return ''
+
+
+def get_ruonia_df(dt_min: str, stop_date: str) -> pd.DataFrame:
     link = (
         f"https://cbr.ru/hd_base/ruonia/dynamics/"
         f"?UniDbQuery.Posted=True&"
         f"UniDbQuery.From={dt_min}&UniDbQuery.To={stop_date}"
     )
-    df = pd.read_html(link, thousands=" ", flavor="html5lib")[0]
-    df = df[df.columns[:3]]
-    df.rename(columns={"Ставка RUONIA, %": "Значение, %"}, inplace=True)
+    res_text = get_ruonia(link)
+    soups = BeautifulSoup(res_text, 'html.parser')
+    table = soups.find('table', class_='data')
+    trs = table.find_all('tr')
+    all_rows = []
+    for tr in trs[1:]:
+        date = tr.find_all('td')[0].text
+        rate = tr.find_all('td')[1].text
+        value = tr.find_all('td')[2].text
+        all_rows.append([date, rate, value])
+    df = pd.DataFrame(all_rows, columns=['Дата ставки', 'Значение, %', 'Объем сделок RUONIA, млрд руб.'])
     return df
 
 
 def processing_ruonia(date_from: str, date_to: str) -> pd.DataFrame:
-    rates = pd.DataFrame()
-    ruonia = get_ruonia_rates(date_from, date_to)
+    ruonia = get_ruonia_df(date_from, date_to)
     ruonia["Дата ставки"] = pd.to_datetime(ruonia["Дата ставки"], format="%d.%m.%Y")
     ruonia["Значение, %"] = ruonia["Значение, %"].apply(
         lambda x: float(x.replace(",", "."))
     )
-    rates = pd.concat([rates, ruonia], axis=1)
-    return rates
+    return ruonia
 
 
 def get_tables(response: requests.Response, category: str, date_from: str, date_to: str) -> pd.DataFrame:
@@ -83,7 +97,7 @@ def convert_type_column(df: pd.DataFrame) -> pd.DataFrame:
         df[column] = df[column].apply(
             lambda x: (
                 float(str(x.replace(",", ".").replace(" ", "")))
-                if isinstance(x, str) and (x != "--" and x != "—")
+                if isinstance(x, str) and (x not in ["--", "—", " — "])
                 else x
             )
         )
@@ -123,6 +137,11 @@ def processing_file(name_file: str) -> None:
     wb.save(name_file)
 
 
+def get_df_with_key_rate(response):
+    df = pd.read_html(response.url, thousands=" ", flavor="html5lib")[0]
+    return df
+
+
 def processing_request(url: str, start: str, end: str) -> pd.DataFrame:
     params: dict[str, bool | str] = {
         "UniDbQuery.Posted": True,
@@ -130,8 +149,7 @@ def processing_request(url: str, start: str, end: str) -> pd.DataFrame:
         "UniDbQuery.To": end,
     }
     response = requests.get(url, params=params)
-    df = pd.read_html(response.url, thousands=" ", flavor="html5lib")[0]
-    return df
+    return response
 
 
 def update_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -145,7 +163,8 @@ def update_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def get_key_rates(date_from: str, date_to: str) -> pd.DataFrame:
     url = "https://www.cbr.ru/hd_base/KeyRate/"
-    df = processing_request(url, date_from, date_to)
+    response = processing_request(url, date_from, date_to)
+    df = get_df_with_key_rate(response)
     df = update_indicators(df)
     return df
 
@@ -281,13 +300,17 @@ def processing_dates(dates: list[bs_tag]) -> list[pd_timestamp]:
     return df_meeting["Date"].tolist()
 
 
-def get_meeting_days() -> list[pd_timestamp]:
+def get_url(url):
+    response = requests.get(url)
+    return response
+
+
+def get_meeting_days() -> list[bs_tag]:
     url = "https://www.cbr.ru/dkp/cal_mp/#t11"
-    r = requests.get(url)
+    r = get_url(url)
     soup = BeautifulSoup(r.text, "html.parser")
     dates = soup.find_all("div", class_="main-events_day")
-    meeting_dates = processing_dates(dates)
-    return meeting_dates
+    return dates
 
 
 def select_meeting_dates(name_file: str, meeting_dates: list[pd_timestamp]) -> None:
@@ -332,7 +355,7 @@ def send_email(file_path: str) -> None:
 
 def main():
     categories = ["ruonia", "roisfix", "nfeaswap", "rurepo"]
-    all_dfs = get_dataframes_from_categories(categories, DATE_FROM, DATE_TO, NAME_FILE)
+    all_dfs = get_dataframes_from_categories(categories, DATE_FROM, DATE_TO)
     if any(df.empty is True for df in all_dfs):
         print('В списке есть пустой датафрейм')
     else:
@@ -340,8 +363,9 @@ def main():
         add_new_list(NAME_FILE, DATE_FROM, DATE_TO)
     processing_file(NAME_FILE)
     meeting_dates = get_meeting_days()
+    meeting_dates = processing_dates(meeting_dates)
     select_meeting_dates(NAME_FILE, meeting_dates)
-    send_email(NAME_FILE)
+    # send_email(NAME_FILE)
 
 
 if __name__ == "__main__":
