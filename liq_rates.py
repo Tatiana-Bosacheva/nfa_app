@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import mimetypes
+import os
 import smtplib
 from datetime import datetime
 from email.mime.application import MIMEApplication
@@ -9,43 +10,63 @@ import openpyxl
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup, Tag
+from dotenv import load_dotenv
 from openpyxl.styles import Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
-DATE_FROM = "01.01.2024"
-DATE_TO = datetime.now().date().strftime("%d.%m.%Y")
-NAME_FILE = "LIQ_Rates_Output.xlsx"
-
+load_dotenv()
 
 pd.options.mode.chained_assignment = None
 pd_timestamp = pd.Timestamp
 bs_tag = Tag
+response_type = requests.models.Response
 
 
-def get_ruonia_rates(dt_min, stop_date):
+def get_url(url: str) -> response_type:
+    response = requests.get(url)
+    return response
+
+
+def collect_data_for_df(res_text: str) -> list[list[str]]:
+    all_rows = []
+    soups = BeautifulSoup(res_text, "html.parser")
+    table = soups.find("table", class_="data")
+    trs = table.find_all("tr")  # type: ignore
+    for tr in trs[1:]:
+        date = tr.find_all("td")[0].text
+        rate = tr.find_all("td")[1].text
+        value = tr.find_all("td")[2].text
+        all_rows.append([date, rate, value])
+    return all_rows
+
+
+def get_ruonia_df(dt_min: str, stop_date: str) -> pd.DataFrame:
     link = (
         f"https://cbr.ru/hd_base/ruonia/dynamics/"
         f"?UniDbQuery.Posted=True&"
         f"UniDbQuery.From={dt_min}&UniDbQuery.To={stop_date}"
     )
-    df = pd.read_html(link, thousands=" ", flavor="html5lib")[0]
-    df = df[df.columns[:3]]
-    df.rename(columns={"Ставка RUONIA, %": "Значение, %"}, inplace=True)
+    res_text = get_url(link)
+    all_rows = collect_data_for_df(res_text.text)
+    df = pd.DataFrame(
+        all_rows,
+        columns=["Дата ставки", "Значение, %", "Объем сделок RUONIA, млрд руб."],
+    )
     return df
 
 
 def processing_ruonia(date_from: str, date_to: str) -> pd.DataFrame:
-    rates = pd.DataFrame()
-    ruonia = get_ruonia_rates(date_from, date_to)
+    ruonia = get_ruonia_df(date_from, date_to)
     ruonia["Дата ставки"] = pd.to_datetime(ruonia["Дата ставки"], format="%d.%m.%Y")
     ruonia["Значение, %"] = ruonia["Значение, %"].apply(
         lambda x: float(x.replace(",", "."))
     )
-    rates = pd.concat([rates, ruonia], axis=1)
-    return rates
+    return ruonia
 
 
-def get_tables(response: requests.Response, category: str, date_from: str, date_to: str) -> pd.DataFrame:
+def get_tables(
+    response: response_type, category: str, date_from: str, date_to: str
+) -> pd.DataFrame:
     soup = BeautifulSoup(response.text, "html.parser")
     headers = []
     if category == "ruonia":
@@ -83,7 +104,7 @@ def convert_type_column(df: pd.DataFrame) -> pd.DataFrame:
         df[column] = df[column].apply(
             lambda x: (
                 float(str(x.replace(",", ".").replace(" ", "")))
-                if isinstance(x, str) and (x != "--" and x != "—")
+                if isinstance(x, str) and (x not in ["--", "—", " — "])
                 else x
             )
         )
@@ -123,15 +144,17 @@ def processing_file(name_file: str) -> None:
     wb.save(name_file)
 
 
-def processing_request(url: str, start: str, end: str) -> pd.DataFrame:
-    params: dict[str, bool | str] = {
-        "UniDbQuery.Posted": True,
-        "UniDbQuery.From": start,
-        "UniDbQuery.To": end,
-    }
-    response = requests.get(url, params=params)
+def get_df_with_key_rate(response: response_type) -> pd.DataFrame:
     df = pd.read_html(response.url, thousands=" ", flavor="html5lib")[0]
     return df
+
+
+def processing_request(url: str, start: str, end: str) -> response_type:
+    url = (
+        f"{url}?UniDbQuery.Posted=True&UniDbQuery.From={start}&UniDbQuery.To={end}"
+    )
+    response = get_url(url)
+    return response
 
 
 def update_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -145,61 +168,58 @@ def update_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def get_key_rates(date_from: str, date_to: str) -> pd.DataFrame:
     url = "https://www.cbr.ru/hd_base/KeyRate/"
-    df = processing_request(url, date_from, date_to)
+    response = processing_request(url, date_from, date_to)
+    df = get_df_with_key_rate(response)
     df = update_indicators(df)
     return df
 
 
+def division_by_hundred(df: pd.DataFrame, column: str) -> list[float]:
+    rates = df[column].values.tolist()
+    rates = [i / 100 for i in rates]
+    return rates
+
+
+def get_imputed_rates(rates_1: list[float], rates_2: list[float]) -> list[float]:
+    imputed_rates = [
+        round(100 * ((1 + rates_1[i]) ** 2 / (1 + rates_2[i]) - 1), 2)
+        for i in range(len(rates_1))
+    ]
+    return imputed_rates
+
+
 def get_rates(df: pd.DataFrame) -> tuple[list[float], ...]:
-    rates_2y = df["2Y"].values.tolist()
-    rates_2y = [i / 100 for i in rates_2y]
+    rates_2y = division_by_hundred(df, "2Y")
+    rates_1y = division_by_hundred(df, "1Y")
+    rates_3m = division_by_hundred(df, "3M")
+    rates_6m = division_by_hundred(df, "6M")
+    rates_1m = division_by_hundred(df, "1M")
+    rates_2m = division_by_hundred(df, "2M")
 
-    rates_1y = df["1Y"].values.tolist()
-    rates_1y = [i / 100 for i in rates_1y]
-
-    rates_3m = df["3M"].values.tolist()
-    rates_3m = [i / 100 for i in rates_3m]
-
-    rates_6m = df["6M"].values.tolist()
-    rates_6m = [i / 100 for i in rates_6m]
-
-    rates_1m = df["1M"].values.tolist()
-    rates_1m = [i / 100 for i in rates_1m]
-
-    rates_2m = df["2M"].values.tolist()
-    rates_2m = [i / 100 for i in rates_2m]
-
-    rates_1y1y = [
-        round(100 * ((1 + rates_2y[i]) ** 2 / (1 + rates_1y[i]) - 1), 2)
-        for i in range(len(rates_2y))
-    ]
-    rates_3m3m = [
-        round(100 * ((1 + rates_6m[i]) ** 2 / (1 + rates_3m[i]) - 1), 2)
-        for i in range(len(rates_6m))
-    ]
-    rates_1m1m = [
-        round(100 * ((1 + rates_2m[i]) ** 2 / (1 + rates_1m[i]) - 1), 2)
-        for i in range(len(rates_2m))
-    ]
-    rates_6m6m = [
-        round(100 * ((1 + rates_1y[i]) ** 2 / (1 + rates_6m[i]) - 1), 2)
-        for i in range(len(rates_1y))
-    ]
+    rates_1y1y = get_imputed_rates(rates_2y, rates_1y)
+    rates_3m3m = get_imputed_rates(rates_6m, rates_3m)
+    rates_1m1m = get_imputed_rates(rates_2m, rates_1m)
+    rates_6m6m = get_imputed_rates(rates_1y, rates_6m)
     return rates_1y1y, rates_3m3m, rates_1m1m, rates_6m6m
 
 
+def count_spread(rates: list[float], key_rates: list[float]) -> list[float]:
+    spread = [(rates[i] - key_rates[i]) * 100 for i in range(len(key_rates))]
+    return spread
+
+
 def get_spread_rates(
-        key_rates: list[float],
-        rates_1m1m: list[float],
-        rates_3m3m: list[float],
-        rates_1y1y: list[float],
-        rates_6m6m: list[float],
-        df: pd.DataFrame
-        ) -> pd.DataFrame:
-    spread_1m1m = [(rates_1m1m[i] - key_rates[i]) * 100 for i in range(len(key_rates))]
-    spread_3m3m = [(rates_3m3m[i] - key_rates[i]) * 100 for i in range(len(key_rates))]
-    spread_1y1y = [(rates_1y1y[i] - key_rates[i]) * 100 for i in range(len(key_rates))]
-    spread_6m6m = [(rates_6m6m[i] - key_rates[i]) * 100 for i in range(len(key_rates))]
+    key_rates: list[float],
+    rates_1m1m: list[float],
+    rates_3m3m: list[float],
+    rates_1y1y: list[float],
+    rates_6m6m: list[float],
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    spread_1m1m = count_spread(rates_1m1m, key_rates)
+    spread_3m3m = count_spread(rates_3m3m, key_rates)
+    spread_1y1y = count_spread(rates_1y1y, key_rates)
+    spread_6m6m = count_spread(rates_6m6m, key_rates)
     df[""] = ""
     df["spread_1m1m"] = spread_1m1m
     df["spread_3m3m"] = spread_3m3m
@@ -218,8 +238,7 @@ def write_to_excel_roisfix_implied(name_file: str, df: pd.DataFrame) -> None:
 def add_new_list(name_file: str, date_from: str, date_to: str) -> None:
     df_roisfix = pd.read_excel(name_file, sheet_name="roisfix")
     rates_1y1y, rates_3m3m, rates_1m1m, rates_6m6m = get_rates(df_roisfix)
-    columns = ["Дата", "1M1M", "3M3M", "1Y1Y", "6M6M"]
-    df = pd.DataFrame(columns=columns)
+    df = pd.DataFrame(columns=["Дата", "1M1M", "3M3M", "1Y1Y", "6M6M"])
     df = pd.concat([df_roisfix["Дата"]], axis=1)
     df["1M1M"] = rates_1m1m
     df["3M3M"] = rates_3m3m
@@ -235,11 +254,13 @@ def add_new_list(name_file: str, date_from: str, date_to: str) -> None:
     write_to_excel_roisfix_implied(name_file, df_merge)
 
 
-def get_dataframes_from_categories(categories: list[str], date_from: str, date_to: str) -> list[pd.DataFrame]:
+def get_dataframes_from_categories(
+    categories: list[str], date_from: str, date_to: str
+) -> list[pd.DataFrame]:
     all_dfs = []
     for category in categories:
         link = f"http://{category}.ru/archive?date_from={date_from}&date_to={date_to}"
-        response = requests.get(link)
+        response = get_url(link)
         df = get_tables(response, category, date_from, date_to)
         all_dfs.append(df)
     return all_dfs
@@ -281,13 +302,12 @@ def processing_dates(dates: list[bs_tag]) -> list[pd_timestamp]:
     return df_meeting["Date"].tolist()
 
 
-def get_meeting_days() -> list[pd_timestamp]:
+def get_meeting_days() -> list[bs_tag]:
     url = "https://www.cbr.ru/dkp/cal_mp/#t11"
-    r = requests.get(url)
+    r = get_url(url)
     soup = BeautifulSoup(r.text, "html.parser")
     dates = soup.find_all("div", class_="main-events_day")
-    meeting_dates = processing_dates(dates)
-    return meeting_dates
+    return dates
 
 
 def select_meeting_dates(name_file: str, meeting_dates: list[pd_timestamp]) -> None:
@@ -318,30 +338,34 @@ def create_message(file_path: str) -> MIMEMultipart:
 
 
 def send_email(file_path: str) -> None:
-    from_email = ""
-    password = ""
+    from_email = os.getenv("FROM_EMAIL")
+    password = os.getenv("PASSWORD")
 
     smtp = smtplib.SMTP("smtp.mail.ru", 587)
     smtp.starttls()
-    smtp.login(from_email, password)
+    smtp.login(from_email, password)  # type: ignore
 
     message = create_message(file_path)
-    smtp.sendmail(from_email, from_email, message.as_string())
+    smtp.sendmail(from_email, from_email, message.as_string())  # type: ignore
     smtp.quit()
 
 
 def main():
     categories = ["ruonia", "roisfix", "nfeaswap", "rurepo"]
-    all_dfs = get_dataframes_from_categories(categories, DATE_FROM, DATE_TO, NAME_FILE)
+    date_from = "01.01.2024"
+    date_to = datetime.now().date().strftime("%d.%m.%Y")
+    name_file = "LIQ_Rates_Output.xlsx"
+    all_dfs = get_dataframes_from_categories(categories, date_from, date_to)
     if any(df.empty is True for df in all_dfs):
-        print('В списке есть пустой датафрейм')
+        print("В списке есть пустой датафрейм")
     else:
-        write_to_excel(all_dfs, categories, NAME_FILE)
-        add_new_list(NAME_FILE, DATE_FROM, DATE_TO)
-    processing_file(NAME_FILE)
+        write_to_excel(all_dfs, categories, name_file)
+        add_new_list(name_file, date_from, date_to)
+    processing_file(name_file)
     meeting_dates = get_meeting_days()
-    select_meeting_dates(NAME_FILE, meeting_dates)
-    send_email(NAME_FILE)
+    meeting_dates = processing_dates(meeting_dates)
+    select_meeting_dates(name_file, meeting_dates)
+    send_email(name_file)
 
 
 if __name__ == "__main__":
